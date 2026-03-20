@@ -1,0 +1,40 @@
+{
+  "maps": [
+    {
+      "name": "La Ligue - S5 Solo Mexique",
+      "source_file": "../data/La ligue.json",
+      "output_file": "../data/generated/la-ligue-s5-solo-mexique.json",
+      "upload": false,
+      "filters": {
+        "sources": ["La Ligue"],
+        "seasons": ["S5"],
+        "modes": ["Solo"],
+        "countries": ["Mexique"]
+      }
+    },
+    {
+      "name": "Cactus - Move Sample 300",
+      "source_file": "../data/La ligue.json",
+      "output_file": "../data/generated/cactus-move-sample-300.json",
+      "upload": false,
+      "filters": {
+        "sources": ["Cactus"],
+        "modes": ["Move"],
+        "sample_size": 300,
+        "sample_seed": 42
+      }
+    },
+    {
+      "name": "La Ligue - France Sample 500",
+      "source_file": "../data/La ligue.json",
+      "output_file": "../data/generated/la-ligue-france-sample-500.json",
+      "upload": false,
+      "filters": {
+        "sources": ["La Ligue"],
+        "countries": ["France"],
+        "sample_size": 500,
+        "sample_seed": 42
+      }
+    }
+  ]
+}

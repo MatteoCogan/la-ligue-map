@@ -1,6 +1,7 @@
 # La Ligue Map
 
 Depot pour la pipeline de transformation et d'upload de la map La Ligue vers `map-making.app`.
+Le projet contient aussi un builder leger pour generer des sous-maps GeoGuessr a partir du JSON produit par la pipeline.
 
 ## Contenu
 
@@ -44,4 +45,4 @@ Les fichiers ignores sont recrees automatiquement au runtime ou telecharges par 
 
 ## Documentation
 
-La documentation detaillee est dans [pipeline/README.md](pipeline/README.md) et [pipeline/QUICK_START.md](pipeline/QUICK_START.md).
+La documentation detaillee est dans [pipeline/README.md](pipeline/README.md), [pipeline/QUICK_START.md](pipeline/QUICK_START.md) et [pipeline/MAP_BUILDER.md](pipeline/MAP_BUILDER.md).
