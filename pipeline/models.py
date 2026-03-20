@@ -12,12 +12,22 @@ class Extra(BaseModel):
 
     @validator('tags', pre=True)
     def normalize_tags(cls, value):
-        """Accepter une liste simple ou un mapping `{tag: {order: n}}`."""
+        """Accepter une liste simple ou un mapping `{tag: {order: n}}`.
+
+        Les exports map-making.app peuvent reassigner les valeurs numeriques
+        `order`. On ne conserve donc que leur ordre relatif pour reconstruire
+        une liste ordonnee localement.
+        """
         if isinstance(value, dict):
             def sort_key(item):
                 tag, metadata = item
                 if isinstance(metadata, dict):
-                    return (metadata.get('order', 10**9), tag.casefold())
+                    raw_order = metadata.get('order', 10**9)
+                    try:
+                        normalized_order = int(raw_order)
+                    except (TypeError, ValueError):
+                        normalized_order = 10**9
+                    return (normalized_order, tag.casefold())
                 return (10**9, tag.casefold())
 
             return [tag for tag, _metadata in sorted(value.items(), key=sort_key)]
@@ -25,7 +35,12 @@ class Extra(BaseModel):
         return value
 
     def to_storage_format(self) -> Dict[str, Any]:
-        """Exporter les tags avec leur ordre d'affichage."""
+        """Exporter un ordre local compact pour les tags.
+
+        Les valeurs 0..N servent au JSON local et comme hint d'ordre relatif
+        a l'import. Elles ne sont pas stables apres un round-trip via
+        map-making.app.
+        """
         return {
             "tags": {
                 tag: {"order": index}
