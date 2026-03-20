@@ -144,27 +144,28 @@ class Transformer:
         source_mode_tags: Set[str] = set()
 
         for item in source_data:
-            for tag in item.get('tags', []):
-                if not isinstance(tag, str):
-                    continue
+            for raw_tag in item.get('tags', []):
+                for tag in self._normalize_source_tags(raw_tag):
+                    if not isinstance(tag, str):
+                        continue
 
-                lower_tag = tag.casefold()
-                if lower_tag in self.SOURCE_TAG_ORDER:
-                    continue
+                    lower_tag = tag.casefold()
+                    if lower_tag in self.SOURCE_TAG_ORDER:
+                        continue
 
-                if tag in self.GEOGUESSR_MODE_ORDER:
-                    continue
+                    if tag in self.GEOGUESSR_MODE_ORDER:
+                        continue
 
-                if re.fullmatch(r'[DL]\d+', tag):
-                    continue
+                    if re.fullmatch(r'[DL]\d+', tag):
+                        continue
 
-                if re.fullmatch(r'S\d+', tag):
-                    continue
+                    if re.fullmatch(r'S\d+', tag):
+                        continue
 
-                if re.fullmatch(r'J\d+', tag):
-                    continue
+                    if re.fullmatch(r'J\d+', tag):
+                        continue
 
-                source_mode_tags.add(tag)
+                    source_mode_tags.add(tag)
 
         self.source_mode_tags = source_mode_tags
 
@@ -253,16 +254,17 @@ class Transformer:
         tags = set()
         
         # Ajouter les tags originaux
-        for tag in (map_tags or []):
-            resolved_modes = self._resolve_ambiguous_mode_tag(tag, map_name)
-            if resolved_modes is not None:
-                tags.update(resolved_modes)
-                continue
+        for raw_tag in (map_tags or []):
+            for tag in self._normalize_source_tags(raw_tag):
+                resolved_modes = self._resolve_ambiguous_mode_tag(tag, map_name)
+                if resolved_modes is not None:
+                    tags.update(resolved_modes)
+                    continue
 
-            tags.add(tag)
-            # Extraire et ajouter les sous-tags
-            subtags = self._extract_subtags(tag)
-            tags.update(subtags)
+                tags.add(tag)
+                # Extraire et ajouter les sous-tags
+                subtags = self._extract_subtags(tag)
+                tags.update(subtags)
         
         # tags.append("Move")
         tags.add(f"link={map_link}")
@@ -450,6 +452,25 @@ class Transformer:
             modes.add('NMPZ')
 
         return modes
+
+    def _normalize_source_tags(self, tag: str) -> Set[str]:
+        """Nettoyer les incoherences connues des tags source."""
+        if not isinstance(tag, str):
+            return set()
+
+        if tag in {'Country', 'Area', 'Thematic Move', 'Thématique (S1&S2)'}:
+            return set()
+
+        if tag == 'Imposteur NM':
+            return {'Imposteur', 'NM'}
+
+        if tag == 'Pêche aux points Move':
+            return {'Pêche aux points', 'Move'}
+
+        if tag == 'Map NM/NMPZ':
+            return {'NM/NMPZ'}
+
+        return {tag}
 
     def _resolve_ambiguous_mode_tag(self, tag: str, map_name: str) -> Set[str] | None:
         """
