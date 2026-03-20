@@ -269,6 +269,7 @@ class Transformer:
         # tags.append("Move")
         tags.add(f"link={map_link}")
         tags.add(map_name)
+        tags.update(self._extract_jornada_tags(map_name))
         
         # Ajouter des tags du nom de la map si des modes GeoGuessr y sont trouvés
         map_modes = self._extract_geoguessr_modes(map_name)
@@ -452,6 +453,13 @@ class Transformer:
             modes.add('NMPZ')
 
         return modes
+
+    def _extract_jornada_tags(self, text: str) -> Set[str]:
+        """Extraire les tags J<num> presents dans un nom de map."""
+        return {
+            f"J{match}"
+            for match in re.findall(r'\bJ(\d+)\b', text)
+        }
 
     def _normalize_source_tags(self, tag: str) -> Set[str]:
         """Nettoyer les incoherences connues des tags source."""
