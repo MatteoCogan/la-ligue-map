@@ -1,0 +1,32 @@
+[Unit]
+Description=La Ligue Pipeline - Transform coordinates to map-making.app
+After=network.target
+Documentation=file:///home/pi/pipeline/README.md
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/pipeline
+ExecStart=/usr/bin/python3 /home/pi/pipeline/main.py --watch
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pipeline
+Environment="PATH=/home/pi/venv/bin:/usr/local/bin:/usr/bin:(standard path)"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Auto-restart après crash
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Ressources (Raspberry-friendly)
+MemoryLimit=512M
+MemoryAccounting=true
+
+[Install]
+WantedBy=multi-user.target

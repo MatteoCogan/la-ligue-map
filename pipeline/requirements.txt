@@ -1,0 +1,5 @@
+requests>=2.28.0
+pydantic>=1.10.0
+python-dotenv>=0.20.0
+watchdog>=3.0.0
+reverse_geocoder>=1.5.1

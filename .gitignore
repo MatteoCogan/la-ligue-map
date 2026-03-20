@@ -1,0 +1,35 @@
+# Secrets
+pipeline/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+pipeline/venv/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Generated runtime files
+logs/
+backups/
+pipeline/__pycache__/
+
+# Downloaded or generated data
+data/coordinatesAllTags.json
+data/coordinatesCactusTags.json
+data/La ligue.json
