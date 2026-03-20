@@ -128,8 +128,17 @@ class Pipeline:
             self.output.parent.mkdir(parents=True, exist_ok=True)
 
             with open(self.output, "w", encoding="utf-8") as file_handle:
+                payload = (
+                    map_data.to_storage_format()
+                    if hasattr(map_data, "to_storage_format")
+                    else (
+                        map_data.model_dump()
+                        if hasattr(map_data, "model_dump")
+                        else map_data.dict()
+                    )
+                )
                 json.dump(
-                    map_data.dict(),
+                    payload,
                     file_handle,
                     indent=2,
                     ensure_ascii=False,

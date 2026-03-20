@@ -1,12 +1,11 @@
 """
 Transformation des données depuis le format source vers le format map-making.app.
 """
-import json
 import re
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Tuple
 from datetime import datetime
 from logger import setup_logger
-from models import MapData, Coordinate, Extra, SourceMapItem
+from models import MapData, Coordinate, Extra
 
 try:
     import reverse_geocoder as rg
@@ -20,6 +19,26 @@ logger = setup_logger(__name__)
 class Transformer:
     """Transforme les données du format source vers le format map-making.app."""
     
+    SOURCE_TAG_ORDER = {
+        'la ligue': 0,
+        'cactus': 1,
+    }
+    GEOGUESSR_MODE_ORDER = {
+        'Move': 0,
+        'NM': 1,
+        'NMPZ': 2,
+    }
+    LA_LIGUE_MODE_ORDER = {
+        'Chasse aux points': 0,
+        'Speedrun': 1,
+        'Coop': 2,
+        'Solo': 3,
+        'Duels': 4,
+        'Sprint': 5,
+        'Classique': 6,
+        'Challenge': 7,
+    }
+
     def __init__(self, skip_duplicates: bool = True):
         """
         Initialiser le transformer.
@@ -28,7 +47,8 @@ class Transformer:
             skip_duplicates: Si True, ignore les coordonnées dupliquées (même lat/lng)
         """
         self.skip_duplicates = skip_duplicates
-        self.country_cache = {}  # Cache pour les pays (lat, lng) -> pays
+        self.country_cache: Dict[Tuple[float, float], str] = {}
+        self.source_mode_tags: Set[str] = set()
         
         # Initialiser reverse_geocoder si disponible
         if HAS_REVERSE_GEOCODER:
@@ -49,6 +69,8 @@ class Transformer:
             MapData compatible map-making.app
         """
         logger.info(f"Début de la transformation de {len(source_data)} items")
+        self._collect_source_mode_tags(source_data)
+        self._warm_country_cache(source_data)
         
         coordinates: List[Coordinate] = []
         stats = {
@@ -97,9 +119,16 @@ class Transformer:
                 continue
         
         # Créer l'objet MapData final
+        all_tags = {
+            tag
+            for coordinate in coordinates
+            for tag in coordinate.extra.tags
+        }
+
         map_data = MapData(
             name="La ligue",
-            customCoordinates=coordinates
+            customCoordinates=coordinates,
+            extra=Extra(tags=self._sort_tags(all_tags, ""))
         )
         
         logger.info(
@@ -109,6 +138,83 @@ class Transformer:
         )
         
         return map_data
+
+    def _collect_source_mode_tags(self, source_data: List[Dict[str, Any]]) -> None:
+        """Recenser les tags metier presents explicitement dans le JSON source."""
+        source_mode_tags: Set[str] = set()
+
+        for item in source_data:
+            for tag in item.get('tags', []):
+                if not isinstance(tag, str):
+                    continue
+
+                lower_tag = tag.casefold()
+                if lower_tag in self.SOURCE_TAG_ORDER:
+                    continue
+
+                if tag in self.GEOGUESSR_MODE_ORDER:
+                    continue
+
+                if re.fullmatch(r'[DL]\d+', tag):
+                    continue
+
+                if re.fullmatch(r'S\d+', tag):
+                    continue
+
+                if re.fullmatch(r'J\d+', tag):
+                    continue
+
+                source_mode_tags.add(tag)
+
+        self.source_mode_tags = source_mode_tags
+
+    @staticmethod
+    def _coord_cache_key(lat: float, lng: float) -> Tuple[float, float]:
+        """Arrondir les coordonnees pour mutualiser les lookups proches."""
+        return (round(lat, 4), round(lng, 4))
+
+    def _warm_country_cache(self, source_data: List[Dict[str, Any]]) -> None:
+        """Precharger le cache pays via un reverse geocoding en batch."""
+        if not HAS_REVERSE_GEOCODER:
+            return
+
+        missing_coords: Dict[Tuple[float, float], Tuple[float, float]] = {}
+
+        for item in source_data:
+            for coord in item.get('coordinates', []):
+                try:
+                    lat = float(coord['lat'])
+                    lng = float(coord['lng'])
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+                coord_key = self._coord_cache_key(lat, lng)
+                if coord_key not in self.country_cache and coord_key not in missing_coords:
+                    missing_coords[coord_key] = (lat, lng)
+
+        if not missing_coords:
+            return
+
+        logger.info(
+            f"Reverse geocoding batch: {len(missing_coords)} coordonnees uniques a resoudre"
+        )
+
+        try:
+            results = rg.search(list(missing_coords.values()))
+        except Exception as e:
+            logger.warning(f"Batch reverse_geocoder impossible, fallback unitaire: {e}")
+            return
+
+        resolved = 0
+        for coord_key, result in zip(missing_coords.keys(), results):
+            country = self._extract_country_tag_from_result(result)
+            self.country_cache[coord_key] = country
+            if country:
+                resolved += 1
+
+        logger.info(
+            f"Reverse geocoding batch termine: {resolved}/{len(missing_coords)} pays resolus"
+        )
     
     def _validate_source_item(self, item: Dict[str, Any]) -> bool:
         """Valider la structure d'un item source."""
@@ -148,6 +254,11 @@ class Transformer:
         
         # Ajouter les tags originaux
         for tag in (map_tags or []):
+            resolved_modes = self._resolve_ambiguous_mode_tag(tag, map_name)
+            if resolved_modes is not None:
+                tags.update(resolved_modes)
+                continue
+
             tags.add(tag)
             # Extraire et ajouter les sous-tags
             subtags = self._extract_subtags(tag)
@@ -165,6 +276,8 @@ class Transformer:
         country = self._get_country_tag(float(coord['lat']), float(coord['lng']))
         if country:
             tags.add(country)
+
+        ordered_tags = self._sort_tags(tags, map_name)
         
         # Créer l'objet Coordinate
         return Coordinate(
@@ -176,7 +289,7 @@ class Transformer:
             panoId=coord.get('panoId'),
             countryCode=coord.get('countryCode'),
             stateCode=coord.get('stateCode'),
-            extra=Extra(tags=sorted(tags)),
+            extra=Extra(tags=ordered_tags),
             createdAt=datetime.utcnow().isoformat() + 'Z'
         )
     
@@ -271,6 +384,9 @@ class Transformer:
             flags = re.IGNORECASE if case_insensitive else 0
             if re.search(pattern, tag, flags):
                 subtags.add(normalized_mode)
+
+        if 'NM' in subtags:
+            subtags.discard('Move')
         
         # Pattern 7: Thèmes/Modes spéciaux (Chasse aux points, Speedrun, Coop, etc.)
         themes = [
@@ -324,19 +440,105 @@ class Transformer:
     def _extract_geoguessr_modes(self, text: str) -> Set[str]:
         """Extraire et normaliser les modes GeoGuessr du texte (nom de map par exemple)."""
         modes = set()
-        
-        geoguessr_patterns = [
-            (r'\bno\s*move\b|\bnm\b', 'NM', True),  # No Move, NM, no move (case-insensitive)
-            (r'\bmove\b', 'Move', True),  # Move (case-insensitive)
-            (r'\bnmpz\b', 'NMPZ', True),  # NMPZ (case-insensitive)
-        ]
-        
-        for pattern, normalized_mode, case_insensitive in geoguessr_patterns:
-            flags = re.IGNORECASE if case_insensitive else 0
-            if re.search(pattern, text, flags):
-                modes.add(normalized_mode)
-        
+
+        if re.search(r'\bno\s*move\b|\bnm\b', text, re.IGNORECASE):
+            modes.add('NM')
+        elif re.search(r'\bmove\b', text, re.IGNORECASE):
+            modes.add('Move')
+
+        if re.search(r'\bnmpz\b', text, re.IGNORECASE):
+            modes.add('NMPZ')
+
         return modes
+
+    def _resolve_ambiguous_mode_tag(self, tag: str, map_name: str) -> Set[str] | None:
+        """
+        Resoudre un tag source ambigu de type `NM/NMPZ` avec le mode explicite du nom.
+        Retourne `None` si le tag source doit etre conserve tel quel.
+        """
+        tag_modes = self._extract_geoguessr_modes(tag)
+        if not ({'NM', 'NMPZ'} <= tag_modes):
+            return None
+
+        name_modes = self._extract_geoguessr_modes(map_name)
+        resolved_modes = tag_modes & name_modes
+        if len(resolved_modes) == 1:
+            return resolved_modes
+
+        return None
+
+    def _sort_tags(self, tags: Set[str], map_name: str) -> List[str]:
+        """Trier les tags pour afficher les plus utiles en premier."""
+        return sorted(tags, key=lambda tag: self._tag_sort_key(tag, map_name))
+
+    def _tag_sort_key(self, tag: str, map_name: str) -> Tuple[Any, ...]:
+        lower_tag = tag.casefold()
+
+        if lower_tag in self.SOURCE_TAG_ORDER:
+            return (0, self.SOURCE_TAG_ORDER[lower_tag], lower_tag)
+
+        if tag in self.GEOGUESSR_MODE_ORDER:
+            return (1, self.GEOGUESSR_MODE_ORDER[tag], lower_tag)
+
+        division_match = re.fullmatch(r'[DL](\d+)', tag)
+        if division_match:
+            return (2, int(division_match.group(1)), lower_tag)
+
+        season_match = re.fullmatch(r'S(\d+)', tag)
+        if season_match:
+            return (3, int(season_match.group(1)), lower_tag)
+
+        jornada_match = re.fullmatch(r'J(\d+)', tag)
+        if jornada_match:
+            return (4, int(jornada_match.group(1)), lower_tag)
+
+        if tag in self.LA_LIGUE_MODE_ORDER:
+            return (5, 0, self.LA_LIGUE_MODE_ORDER[tag], lower_tag)
+
+        if tag in self.source_mode_tags:
+            return (5, 1, lower_tag)
+
+        if self._is_country_tag(tag):
+            return (6, lower_tag)
+
+        if tag == map_name:
+            return (8, lower_tag)
+
+        if tag.startswith('link='):
+            return (9, lower_tag)
+
+        return (7, lower_tag)
+
+    def _is_country_tag(self, tag: str) -> bool:
+        """Distinguer les tags pays des autres tags."""
+        if tag in self.GEOGUESSR_MODE_ORDER:
+            return False
+
+        if re.fullmatch(r'[A-Z]{2}', tag):
+            return True
+
+        known_countries = {
+            'Royaume-Uni', 'France', 'Allemagne', 'Italie', 'Espagne',
+            'Portugal', 'Belgique', 'Pays-Bas', 'Suisse', 'Autriche',
+            'Grèce', 'Pologne', 'Tchéquie', 'Slovaquie', 'Hongrie',
+        }
+        return tag in known_countries
+
+    def _extract_country_tag_from_result(self, result: Any) -> str:
+        """Normaliser la lecture du resultat reverse_geocoder."""
+        if isinstance(result, dict):
+            return (
+                result.get('country')
+                or result.get('country_name')
+                or result.get('cc')
+                or ""
+            )
+
+        if isinstance(result, (list, tuple)) and len(result) > 2:
+            country = result[2]
+            return country if isinstance(country, str) else ""
+
+        return ""
     
     def _get_country_tag(self, lat: float, lng: float) -> str:
         """
@@ -353,15 +555,14 @@ class Transformer:
             return ""
         
         # Vérifier si déjà en cache
-        coord_key = (round(lat, 4), round(lng, 4))  # Arrondir pour cache plus efficace
+        coord_key = self._coord_cache_key(lat, lng)
         if coord_key in self.country_cache:
             return self.country_cache[coord_key]
         
         try:
-            # reverse_geocoder retourne (lat, lng, nom_pays)
             results = rg.search([(lat, lng)])
             if results and len(results) > 0:
-                country = results[0][2]  # Index 2 = nom du pays
+                country = self._extract_country_tag_from_result(results[0])
                 self.country_cache[coord_key] = country
                 return country
         except Exception as e:
