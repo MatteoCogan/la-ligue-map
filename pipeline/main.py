@@ -4,15 +4,17 @@ Pipeline main entrypoint and orchestration.
 
 import argparse
 import json
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Deque, Dict, Optional, Tuple
 
 from config import (
     API_KEY,
     AUTO_UPLOAD,
     BACKUP_DIR,
     DRY_RUN,
+    LOG_DIR,
     MAP_ID,
     OUTPUT_FILE,
     SOURCE_FILE_LOCAL,
@@ -71,6 +73,8 @@ class Pipeline:
 
             logger.info("\n[2/5] Transformation...")
             map_data = self.transformer.transform(source_data)
+            previous_map_data = self._load_previous_output()
+            self._preserve_existing_created_at(previous_map_data, map_data)
             transform_stats = self.transformer.get_stats(map_data)
 
             logger.info(f"  - {transform_stats['total_coordinates']} coordonnees")
@@ -87,7 +91,6 @@ class Pipeline:
             if self.dry_run:
                 logger.warning("DRY_RUN: Les fichiers ne seront pas modifies")
             else:
-                previous_map_data = self._load_previous_output()
                 self._save_output(map_data)
                 self._generate_diff(previous_map_data, map_data)
 
@@ -177,6 +180,39 @@ class Pipeline:
             raise NotImplementedError("Interactive prompt non implemente en mode headless")
         return None
 
+    @staticmethod
+    def _coordinate_signature(coordinate) -> Tuple[Any, ...]:
+        """Build a stable signature for matching equivalent coordinates across runs."""
+        return (
+            round(coordinate.lat, 7),
+            round(coordinate.lng, 7),
+            coordinate.panoId or "",
+            coordinate.countryCode or "",
+            coordinate.stateCode or "",
+            tuple(sorted(coordinate.extra.tags)),
+        )
+
+    def _preserve_existing_created_at(self, previous_map_data, map_data) -> None:
+        """Reuse createdAt from the previous output when the logical coordinate is unchanged."""
+        if not previous_map_data:
+            return
+
+        existing_created_at: Dict[Tuple[Any, ...], Deque[str]] = defaultdict(deque)
+        for coordinate in previous_map_data.customCoordinates:
+            if coordinate.createdAt:
+                signature = self._coordinate_signature(coordinate)
+                existing_created_at[signature].append(coordinate.createdAt)
+
+        reused_count = 0
+        for coordinate in map_data.customCoordinates:
+            signature = self._coordinate_signature(coordinate)
+            if existing_created_at[signature]:
+                coordinate.createdAt = existing_created_at[signature].popleft()
+                reused_count += 1
+
+        if reused_count:
+            logger.info(f"createdAt preserves depuis la sortie precedente: {reused_count}")
+
 
 def main() -> None:
     """CLI entrypoint."""
@@ -239,6 +275,7 @@ def main() -> None:
             SOURCE_FILE_LOCAL,
             callback=lambda: pipeline.run(),
             debounce_seconds=WATCH_DEBOUNCE_SECONDS,
+            ignored_paths=[OUTPUT_FILE, LOG_DIR, BACKUP_DIR],
         )
 
         pipeline.run()

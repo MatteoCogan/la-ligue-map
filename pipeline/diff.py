@@ -87,8 +87,8 @@ class DiffManager:
         checksum_before = self.compute_checksum(before)
         checksum_after = self.compute_checksum(after)
         
-        before_coords = {(c.lat, c.lng, tuple(c.extra.tags)): c for c in before.customCoordinates}
-        after_coords = {(c.lat, c.lng, tuple(c.extra.tags)): c for c in after.customCoordinates}
+        before_coords = {self._coordinate_key(c): c for c in before.customCoordinates}
+        after_coords = {self._coordinate_key(c): c for c in after.customCoordinates}
         
         added = []
         removed = []
@@ -108,10 +108,10 @@ class DiffManager:
         for key, after_coord in after_coords.items():
             if key in before_coords:
                 before_coord = before_coords[key]
-                if before_coord.dict() != after_coord.dict():
+                if self._normalized_coordinate(before_coord) != self._normalized_coordinate(after_coord):
                     modified.append({
-                        "before": before_coord.dict(),
-                        "after": after_coord.dict()
+                        "before": self._normalized_coordinate(before_coord),
+                        "after": self._normalized_coordinate(after_coord)
                     })
         
         return {
@@ -129,6 +129,22 @@ class DiffManager:
                 "modified": modified[:5]
             }
         }
+
+    @staticmethod
+    def _coordinate_key(coordinate) -> Tuple[Any, ...]:
+        """Create a diff key that ignores tag ordering."""
+        return (
+            round(coordinate.lat, 7),
+            round(coordinate.lng, 7),
+            tuple(sorted(coordinate.extra.tags)),
+        )
+
+    @staticmethod
+    def _normalized_coordinate(coordinate) -> Dict[str, Any]:
+        """Normalize coordinate serialization for stable comparisons."""
+        normalized = coordinate.dict()
+        normalized["extra"]["tags"] = sorted(normalized["extra"].get("tags", []))
+        return normalized
     
     def save_diff_report(
         self,

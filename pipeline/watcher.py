@@ -1,139 +1,166 @@
 """
-Mode watch pour re-exécuter la pipeline automatiquement.
+Watch mode utilities for re-running the pipeline on source changes.
 """
+
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional
-from datetime import datetime, timedelta
+from typing import Callable, Iterable, Optional, Set
+
 from logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Essayer d'importer watchdog, fallback à un simple polling si indisponible
 try:
+    from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+
     HAS_WATCHDOG = True
 except ImportError:
     HAS_WATCHDOG = False
-    logger.warning("watchdog non installé, utilisation du polling à la place")
-    
-    # Créer une classe de base vide pour quand watchdog n'est pas disponible
+    logger.warning("watchdog non installe, utilisation du polling a la place")
+
     class FileSystemEventHandler:
-        """Dummy base class when watchdog is not installed."""
+        """Fallback base class when watchdog is unavailable."""
+
         pass
 
 
 class FileChangeHandler(FileSystemEventHandler):
-    """Handler pour les changements de fichiers (avec watchdog)."""
-    
-    def __init__(self, callback: Callable, debounce_seconds: float = 5):
-        """
-        Initialiser le handler.
-        
-        Args:
-            callback: Fonction à appeler quand un changement est détecté
-            debounce_seconds: Délai avant d'appeler le callback (évite les appels multiples)
-        """
+    """Watchdog handler that only reacts to the tracked source file."""
+
+    def __init__(
+        self,
+        target_file: Path,
+        callback: Callable[[], None],
+        debounce_seconds: float = 5,
+        ignored_paths: Optional[Iterable[Path]] = None,
+    ):
+        self.target_file = Path(target_file).resolve(strict=False)
         self.callback = callback
         self.debounce_seconds = debounce_seconds
-        self.last_triggered = None
-    
-    def on_modified(self, event):
-        """Appelé quand un fichier est modifié."""
-        if event.is_directory:
+        self.last_triggered: Optional[datetime] = None
+        self.ignored_paths: Set[Path] = {
+            Path(path).resolve(strict=False) for path in (ignored_paths or [])
+        }
+
+    def _should_ignore(self, path: Path) -> bool:
+        for ignored_path in self.ignored_paths:
+            if path == ignored_path or ignored_path in path.parents:
+                return True
+        return False
+
+    def _handle_path(self, raw_path: str) -> None:
+        event_path = Path(raw_path).resolve(strict=False)
+
+        if self._should_ignore(event_path):
+            logger.debug(f"Changement ignore: {event_path}")
             return
-        
-        # Debounce pour éviter plusieurs appels rapides
+
+        if event_path != self.target_file:
+            logger.debug(f"Changement hors cible ignore: {event_path}")
+            return
+
         now = datetime.now()
         if self.last_triggered and (now - self.last_triggered).total_seconds() < self.debounce_seconds:
             return
-        
+
         self.last_triggered = now
-        logger.info(f"Changement détecté: {event.src_path}")
+        logger.info(f"Changement detecte sur le fichier source: {event_path}")
         self.callback()
+
+    def on_modified(self, event) -> None:
+        if event.is_directory:
+            return
+        self._handle_path(event.src_path)
+
+    def on_created(self, event) -> None:
+        if event.is_directory:
+            return
+        self._handle_path(event.src_path)
+
+    def on_moved(self, event) -> None:
+        if event.is_directory:
+            return
+        self._handle_path(event.dest_path)
 
 
 class Watcher:
-    """Gestionnaire de watch pour les changements de fichiers."""
-    
-    def __init__(self, target_file: Path, callback: Callable, debounce_seconds: float = 5):
-        """
-        Initialiser le watcher.
-        
-        Args:
-            target_file: Fichier à surveiller
-            callback: Fonction à appeler lors de changements
-            debounce_seconds: Délai de debounce
-        """
-        self.target_file = Path(target_file)
+    """Watch a specific input file and rerun the callback when it changes."""
+
+    def __init__(
+        self,
+        target_file: Path,
+        callback: Callable[[], None],
+        debounce_seconds: float = 5,
+        ignored_paths: Optional[Iterable[Path]] = None,
+    ):
+        self.target_file = Path(target_file).resolve(strict=False)
         self.callback = callback
         self.debounce_seconds = debounce_seconds
-        
-        self.observer = None
-        self.last_modified = self.target_file.stat().st_mtime if self.target_file.exists() else 0
-    
+        self.ignored_paths: Set[Path] = {
+            Path(path).resolve(strict=False) for path in (ignored_paths or [])
+        }
+
+        self.observer: Optional[Observer] = None if HAS_WATCHDOG else None
+        self.last_modified = self.target_file.stat().st_mtime if self.target_file.exists() else 0.0
+
     def start(self) -> None:
-        """Démarrer la surveillance."""
         if HAS_WATCHDOG:
             self._start_watchdog()
         else:
             self._start_polling()
-    
+
     def _start_watchdog(self) -> None:
-        """Démarrer avec watchdog (plus efficace)."""
         try:
-            logger.info(f"Démarrage du watch (watchdog) sur {self.target_file.parent}")
-            
-            handler = FileChangeHandler(self.callback, self.debounce_seconds)
-            self.observer = Observer()
-            self.observer.schedule(
-                handler,
-                str(self.target_file.parent),
-                recursive=False
+            logger.info(f"Demarrage du watch (watchdog) sur {self.target_file.parent}")
+
+            handler = FileChangeHandler(
+                target_file=self.target_file,
+                callback=self.callback,
+                debounce_seconds=self.debounce_seconds,
+                ignored_paths=self.ignored_paths,
             )
+            self.observer = Observer()
+            self.observer.schedule(handler, str(self.target_file.parent), recursive=False)
             self.observer.start()
-            
-            logger.info("✓ Watch démarré (watchdog)")
-            
+
+            logger.info("Watch demarre (watchdog)")
+
             try:
                 while True:
                     time.sleep(1)
             except KeyboardInterrupt:
-                logger.info("Arrêt du watch...")
+                logger.info("Arret du watch...")
                 self.observer.stop()
                 self.observer.join()
-        
-        except Exception as e:
-            logger.error(f"Erreur lors du démarrage du watch: {e}")
+
+        except Exception as exc:
+            logger.error(f"Erreur lors du demarrage du watch: {exc}")
             logger.info("Fallback vers le polling...")
             self._start_polling()
-    
+
     def _start_polling(self) -> None:
-        """Démarrer avec polling (fallback)."""
-        logger.info(f"Démarrage du watch (polling) sur {self.target_file}")
-        
+        logger.info(f"Demarrage du watch (polling) sur {self.target_file}")
+
         try:
             while True:
                 if self.target_file.exists():
                     current_mtime = self.target_file.stat().st_mtime
-                    
+
                     if current_mtime > self.last_modified:
-                        logger.info(f"Changement détecté: {self.target_file}")
+                        logger.info(f"Changement detecte sur le fichier source: {self.target_file}")
                         self.last_modified = current_mtime
-                        
-                        # Debounce
                         time.sleep(self.debounce_seconds)
                         self.callback()
-                
+
                 time.sleep(1)
-        
+
         except KeyboardInterrupt:
-            logger.info("Arrêt du watch")
-    
+            logger.info("Arret du watch")
+
     def stop(self) -> None:
-        """Arrêter la surveillance."""
         if self.observer:
             self.observer.stop()
             self.observer.join()
-            logger.info("Watch arrêté")
+            logger.info("Watch arrete")

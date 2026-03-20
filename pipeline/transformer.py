@@ -176,7 +176,7 @@ class Transformer:
             panoId=coord.get('panoId'),
             countryCode=coord.get('countryCode'),
             stateCode=coord.get('stateCode'),
-            extra=Extra(tags=list(tags)),
+            extra=Extra(tags=sorted(tags)),
             createdAt=datetime.utcnow().isoformat() + 'Z'
         )
     
