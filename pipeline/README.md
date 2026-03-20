@@ -82,11 +82,23 @@ python3 main.py
 # Depuis URL remote avec validation strict
 python3 main.py --source remote
 
+# Uniquement La Ligue
+python3 main.py --source remote --dataset la-ligue
+
+# Uniquement Cactus
+python3 main.py --source remote --dataset cactus
+
 # Depuis fichier local
 python3 main.py --source local
 
 # Uploader vers map-making.app
 python3 main.py --upload --api-key YOUR_API_KEY --map-id MAP_ID
+
+# Re-uploader le JSON final existant sans retraiter les sources
+python3 main.py --upload-only --api-key YOUR_API_KEY --map-id MAP_ID
+
+# Invalide: upload-only ne peut pas tourner avec le watch
+# python3 main.py --upload-only --watch
 
 # Mode watch (surveillance fichier)
 python3 main.py --watch
@@ -97,6 +109,7 @@ python3 main.py --dry-run
 # Tous les paramètres
 python3 main.py \
   --source auto \
+  --dataset both \
   --output data/La_ligue.json \
   --api-key YOUR_API_KEY \
   --map-id MAP_ID \
@@ -204,6 +217,27 @@ Content-Type: application/json
   }]
 }
 ```
+
+### Note sur `extra.tags.order`
+
+Le bloc racine `extra.tags` sert a proposer un ordre d'affichage local des tags:
+
+```json
+"extra": {
+  "tags": {
+    "La Ligue": { "order": 0 },
+    "S5": { "order": 1 },
+    "J0": { "order": 2 }
+  }
+}
+```
+
+Important:
+
+- Le pipeline traite ces valeurs comme un ordre relatif local, pas comme des IDs stables.
+- `map-making.app` peut reassigner ces nombres a l'import/export.
+- Il ne faut donc pas comparer les valeurs numeriques apres un round-trip web.
+- Seul l'ordre relatif des tags est suppose survivre.
 
 ## 📊 Exemple d'exécution
 

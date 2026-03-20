@@ -10,6 +10,44 @@ class Extra(BaseModel):
     """Données supplémentaires d'une coordonnée."""
     tags: List[str] = Field(default_factory=list)
 
+    @validator('tags', pre=True)
+    def normalize_tags(cls, value):
+        """Accepter une liste simple ou un mapping `{tag: {order: n}}`.
+
+        Les exports map-making.app peuvent reassigner les valeurs numeriques
+        `order`. On ne conserve donc que leur ordre relatif pour reconstruire
+        une liste ordonnee localement.
+        """
+        if isinstance(value, dict):
+            def sort_key(item):
+                tag, metadata = item
+                if isinstance(metadata, dict):
+                    raw_order = metadata.get('order', 10**9)
+                    try:
+                        normalized_order = int(raw_order)
+                    except (TypeError, ValueError):
+                        normalized_order = 10**9
+                    return (normalized_order, tag.casefold())
+                return (10**9, tag.casefold())
+
+            return [tag for tag, _metadata in sorted(value.items(), key=sort_key)]
+
+        return value
+
+    def to_storage_format(self) -> Dict[str, Any]:
+        """Exporter un ordre local compact pour les tags.
+
+        Les valeurs 0..N servent au JSON local et comme hint d'ordre relatif
+        a l'import. Elles ne sont pas stables apres un round-trip via
+        map-making.app.
+        """
+        return {
+            "tags": {
+                tag: {"order": index}
+                for index, tag in enumerate(self.tags)
+            }
+        }
+
 
 class Coordinate(BaseModel):
     """Structure d'une coordonnée compatible map-making.app."""
@@ -50,6 +88,10 @@ class Coordinate(BaseModel):
             "createdAt": self.createdAt or datetime.utcnow().isoformat() + 'Z'
         }
 
+    def to_storage_format(self) -> Dict[str, Any]:
+        """Convertir au format JSON local en conservant les tags par location."""
+        return self.model_dump() if hasattr(self, "model_dump") else self.dict()
+
 
 class MapData(BaseModel):
     """Structure complète d'une map compatible map-making.app."""
@@ -58,6 +100,8 @@ class MapData(BaseModel):
         default_factory=list,
         description="Liste des coordonnées"
     )
+
+    extra: Optional[Extra] = None
 
     class Config:
         json_encoders = {
@@ -71,6 +115,19 @@ class MapData(BaseModel):
             "coordinates_with_pano": sum(1 for c in self.customCoordinates if c.panoId),
             "coordinates_with_country": sum(1 for c in self.customCoordinates if c.countryCode),
         }
+
+    def to_storage_format(self) -> Dict[str, Any]:
+        """Convertir la map au format JSON local."""
+        data = {
+            "name": self.name,
+            "customCoordinates": [
+                coordinate.to_storage_format()
+                for coordinate in self.customCoordinates
+            ],
+        }
+        if self.extra:
+            data["extra"] = self.extra.to_storage_format()
+        return data
 
 
 class SourceMapItem(BaseModel):
