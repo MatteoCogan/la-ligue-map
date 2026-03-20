@@ -23,6 +23,7 @@ from config import (
 from diff import DiffManager
 from loader import Loader
 from logger import setup_logger
+from models import MapData
 from transformer import Transformer
 from uploader import Uploader
 from validator import Validator
@@ -37,20 +38,24 @@ class Pipeline:
     def __init__(
         self,
         source: str = "auto",
+        datasets: str = "both",
         output: Optional[Path] = None,
         api_key: Optional[str] = None,
         map_id: Optional[str] = None,
         auto_upload: bool = False,
         dry_run: bool = False,
+        upload_only: bool = False,
     ):
         self.source = source
+        self.datasets = datasets
         self.output = Path(output) if output else OUTPUT_FILE
         self.api_key = api_key or API_KEY
         self.map_id = map_id or MAP_ID
         self.auto_upload = auto_upload or AUTO_UPLOAD
         self.dry_run = dry_run or DRY_RUN
+        self.upload_only = upload_only
 
-        self.loader = Loader(source)
+        self.loader = Loader(source, datasets=datasets)
         self.transformer = Transformer()
         self.validator = Validator()
         self.uploader = Uploader(self.api_key) if self.api_key else None
@@ -63,6 +68,9 @@ class Pipeline:
             logger.info("DEBUT DE LA PIPELINE")
             logger.info("=" * 60)
             start_time = datetime.now()
+
+            if self.upload_only:
+                return self._run_upload_only(start_time)
 
             logger.info("\n[1/5] Chargement des donnees...")
             source_data = self.loader.load()
@@ -122,6 +130,42 @@ class Pipeline:
             logger.error(f"ERREUR: {exc}", exc_info=True)
             return False
 
+    def _run_upload_only(self, start_time: datetime) -> bool:
+        """Upload the existing output file without re-running the pipeline."""
+        logger.info("\n[1/1] Upload only...")
+
+        map_data = self._load_existing_output()
+        if not map_data:
+            logger.error(f"Fichier de sortie introuvable ou invalide: {self.output}")
+            return False
+
+        if self.dry_run:
+            logger.warning("DRY_RUN: Upload non execute")
+            return True
+
+        if not self.uploader:
+            logger.error("Upload demande mais aucune cle API n'est configuree")
+            return False
+
+        upload_map_id = self.map_id or self._prompt_for_map_id()
+        if not upload_map_id:
+            logger.info("Upload annule")
+            return False
+
+        success = self.uploader.upload_map_data(map_data, upload_map_id)
+        if not success:
+            logger.error("Upload only echoue")
+            return False
+
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info("\n" + "=" * 60)
+        logger.info("UPLOAD ONLY REUSSI")
+        logger.info(f"  Duree: {elapsed:.2f}s")
+        logger.info(f"  Coordonnees: {len(map_data.customCoordinates)}")
+        logger.info(f"  Fichier: {self.output}")
+        logger.info("=" * 60)
+        return True
+
     def _save_output(self, map_data) -> None:
         """Save transformed data to disk."""
         try:
@@ -150,6 +194,19 @@ class Pipeline:
         except Exception as exc:
             logger.error(f"Erreur lors de la sauvegarde: {exc}")
             raise
+
+    def _load_existing_output(self) -> Optional[MapData]:
+        """Load the current output file as MapData."""
+        if not self.output.exists():
+            return None
+
+        try:
+            with open(self.output, "r", encoding="utf-8") as file_handle:
+                current_data_dict = json.load(file_handle)
+            return MapData(**current_data_dict)
+        except Exception as exc:
+            logger.warning(f"Impossible de charger le fichier de sortie: {exc}")
+            return None
 
     def _load_previous_output(self) -> Optional[Any]:
         """Load the previous output version before overwriting it."""
@@ -236,6 +293,14 @@ def main() -> None:
         help="Source des donnees (defaut: auto)",
     )
     parser.add_argument(
+        "--files",
+        "--dataset",
+        dest="files",
+        choices=["la-ligue", "cactus", "both"],
+        default="both",
+        help="Jeu de fichiers a charger (defaut: both)",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         help=f"Fichier de sortie (defaut: {OUTPUT_FILE})",
@@ -265,16 +330,26 @@ def main() -> None:
         action="store_true",
         help="Ne pas modifier les fichiers (test only)",
     )
+    parser.add_argument(
+        "--upload-only",
+        action="store_true",
+        help="Uploader uniquement le fichier de sortie existant",
+    )
 
     args = parser.parse_args()
 
+    if args.upload_only and args.watch:
+        parser.error("--upload-only ne peut pas etre utilise avec --watch")
+
     pipeline = Pipeline(
         source=args.source,
+        datasets=args.files,
         output=args.output,
         api_key=args.api_key,
         map_id=args.map_id,
         auto_upload=args.upload,
         dry_run=args.dry_run,
+        upload_only=args.upload_only,
     )
 
     if args.watch:

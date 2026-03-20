@@ -82,11 +82,23 @@ python3 main.py
 # Depuis URL remote avec validation strict
 python3 main.py --source remote
 
+# Uniquement La Ligue
+python3 main.py --source remote --dataset la-ligue
+
+# Uniquement Cactus
+python3 main.py --source remote --dataset cactus
+
 # Depuis fichier local
 python3 main.py --source local
 
 # Uploader vers map-making.app
 python3 main.py --upload --api-key YOUR_API_KEY --map-id MAP_ID
+
+# Re-uploader le JSON final existant sans retraiter les sources
+python3 main.py --upload-only --api-key YOUR_API_KEY --map-id MAP_ID
+
+# Invalide: upload-only ne peut pas tourner avec le watch
+# python3 main.py --upload-only --watch
 
 # Mode watch (surveillance fichier)
 python3 main.py --watch
@@ -97,6 +109,7 @@ python3 main.py --dry-run
 # Tous les paramètres
 python3 main.py \
   --source auto \
+  --dataset both \
   --output data/La_ligue.json \
   --api-key YOUR_API_KEY \
   --map-id MAP_ID \
